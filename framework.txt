@@ -1,0 +1,158 @@
+AFT-LDSC Minimal Framework (Draft v2)
+
+一、目标
+- 不再 follow LDSC 的 package 层级；改成最小可理解、最小可调用的结构。
+- 用户只需要一条命令风格即可使用：
+  - `python xx.py --mode <功能> --input <数据> --ld-panel <面板> ...`
+- 第一版只保留 4 个主功能：
+  1. `sumstats`（gof.py + sumstats.py）
+  2. `heritability`（survival_ldsc.py + calculate_heri.py）
+  3. `enrichment`（baselineLD_survival.py）
+  4. `gcor`（survival_survival_gcor.py + survival_binary_all_gcor.py）
+
+
+二、最小包骨架（你要求的主骨架）
+默认包名先用 `aft_ldsc`（后续可改）：
+
+AFT-LDSC/
+  src/
+    aft_ldsc/
+      __init__.py
+      core.py
+      sumstats_task.py
+      heritability_task.py
+      enrichment_task.py
+      gcor_task.py
+      regression.py
+      jackknife.py
+      io_utils.py
+      qc.py
+  examples/
+    minimal_example.py
+  tests/
+    test_smoke.py
+  README.md
+  pyproject.toml
+  requirements.txt
+  LICENSE
+  .gitignore
+
+说明：
+- 你给的 9 个文件/目录会完整保留。
+- 额外仅增加了少量“功能子 py + 通用模块”，用于满足你提到的“主函数 + 子功能 + 共用 weighted regression/jackknife”。
+- 不再拆成多级 `cli/core/workflows/schemas/docs`，避免过度工程化。
+
+
+三、主脚本逻辑（一个入口）
+入口：`src/aft_ldsc/core.py`
+
+统一参数风格（单入口 + mode）：
+- `--mode {sumstats,heritability,enrichment,gcor}`  # 具体功能
+- `--input ...` / `--input1 ...` / `--input2 ...`   # 输入数据
+- `--ld-panel ...`                                  # 使用的 LD panel
+- `--out ...`                                       # 输出前缀
+- `--n-blocks`（默认 200）
+- `--threads`（默认按需）
+
+建议调用示例：
+- `python -m aft_ldsc.core --mode sumstats --input phenotype.tsv --event event.tsv --covar covar.tsv --geno plink_prefix --out out/s1`
+- `python -m aft_ldsc.core --mode heritability --input trait.aft.sumstats.gz --ld-panel eur_w_ld_chr --out out/h2`
+- `python -m aft_ldsc.core --mode enrichment --input trait.aft.sumstats.gz --ld-panel baselineLD_v2.2 --annot baselineLD --frq 1000G_frq --out out/enrich`
+- `python -m aft_ldsc.core --mode gcor --input1 trait1.aft.sumstats.gz --input2 trait2.sumstats.gz --ld-panel eur_w_ld_chr --out out/rg`
+
+
+四、4 个子功能模块（与现有脚本映射）
+1. `sumstats_task.py`
+- 合并 `gof.py` + `sumstats.py` 的核心逻辑：
+  - 拟合 LogNormal / LogLogistic / Weibull
+  - 用 wCvM 选择 best model（或用户强制指定）
+  - 计算 survival summary statistics（V, V2, N, ALPHA 等）
+- 输出：`*.aft.sumstats.gz` + `*.gof.tsv`
+
+2. `heritability_task.py`
+- 合并 `survival_ldsc.py` + `calculate_heri.py` 的核心逻辑：
+  - 迭代加权回归估计总 h2（必要时可在不同 AFT 模型下比较）
+  - 根据输入 LD panel 判断：
+    - 普通面板：输出总遗传力
+    - baselineLD 类分层面板：输出分块加总遗传力（可给后续 enrichment 共用）
+- 输出：`*.h2.tsv`
+
+3. `enrichment_task.py`
+- 按 `baselineLD_survival.py` 主逻辑实现：
+  - 分层回归
+  - `Prop_SNPs / Prop_h2 / Enrichment / Coefficient` + SE + P
+- 输出：`*.enrichment.tsv`
+
+4. `gcor_task.py`
+- 结合 `survival_survival_gcor.py` + `survival_binary_all_gcor.py`：
+  - survival-survival
+  - survival-binary（兼容第二性状为标准 LDSC sumstats）
+- 输出：`*.gcor.tsv`
+
+
+五、共用模块（简化但统一）
+1. `regression.py`
+- 放共用 weighted regression（h2/enrichment/gcor 都调用）
+- 提供统一接口，避免每个任务重复写 WLS 迭代
+
+2. `jackknife.py`
+- 放 block jackknife（默认 200 blocks）
+- 返回 estimate / se / delete values（按需写文件）
+
+3. `io_utils.py` + `qc.py`
+- 只保留必要检查：
+  - 文件存在、必要列存在、SNP 对齐、N>0、alpha>0
+  - NA/inf 清理与最小日志
+- 不引入 LDSC 那套过重的 parser 体系
+
+
+六、输入输出约定（第一版）
+输入：
+- `sumstats` 模式：个体层 survival 数据（time/event/covariate + genotype 或投影后基因型）
+- 其余模式：`*.aft.sumstats.gz`（或 gcor 的第二性状 LDSC sumstats）+ LD panel
+
+统一输出：
+- `*.results.tsv`（主结果）
+- `*.log`（关键参数与摘要）
+- 可选 `*.delete.tsv`（jackknife delete values）
+
+建议最小必需列（AFT sumstats）：
+- `SNP, A1, A2, N, V, V2, ALPHA`
+- 可选：`CHR, BP, MAF, INFO, AFT_DIST`
+
+
+七、minimal dependencies（不 over-engineer）
+`requirements.txt` 仅保留：
+- numpy
+- pandas
+- scipy
+- statsmodels
+- lifelines
+- tqdm
+
+可选依赖（仅当直接读 PLINK bed 时启用）：
+- pysnptools
+
+不引入：
+- 复杂配置系统
+- 大型 CLI 框架
+- 额外数据库/服务依赖
+
+
+八、MVP 实现顺序（按你后续编码节奏）
+1. 先打通 `core.py --mode sumstats`
+2. 再做 `--mode heritability`（总 h2）
+3. 再做 `--mode enrichment`
+4. 最后做 `--mode gcor`
+5. 补 `examples/minimal_example.py` + `tests/test_smoke.py`
+
+
+九、当前约束与取舍
+- 取舍 1：保持单入口命令，牺牲少量“优雅子命令”设计，换取 reviewer 一看就懂。
+- 取舍 2：先保证可跑、可复现、可验证；暂不追求 LDSC 全兼容参数覆盖。
+- 取舍 3：先复用你现有数学实现，后续再逐步重构性能和扩展功能。
+
+
+十、你确认后我就按这个 framework 开始写代码
+- 代码目标：先可用、再简洁、最后扩展。
+- 默认不做额外工程花活，优先让生物/医学背景用户 5 分钟内跑通。

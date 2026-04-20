@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+test_individual/outputs/
+test_individual/slurm_logs/
+.pytest_cache/
+archived/

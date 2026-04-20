@@ -13,7 +13,7 @@ Core modes:
 
 ```bash
 git clone https://github.com/RuiqiBai-Stat/AFT-LDSC.git
-cd AFT_LDSC
+cd AFT-LDSC
 python -m pip install -U pip
 python -m pip install -e .
 ```
